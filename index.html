@@ -100,16 +100,28 @@
     paint();
   }
 
-  // Move forward through the script, matching heard words within a small window
+  // Follow along: match nearby words, and jump ahead when a phrase further down is spoken
   function advance(heard, from) {
+    const h = heard.map(norm).filter(Boolean);
     let p = from;
-    heard.forEach(h => {
-      const n = norm(h);
-      if (!n) return;
-      for (let k = 0; k < 8 && p + k < words.length; k++) {
-        if (words[p + k].norm === n) { p = p + k + 1; break; }
+    for (let i = 0; i < h.length; i++) {
+      let moved = false;
+      for (let k = 0; k < 4 && p + k < words.length; k++) {
+        if (words[p + k].norm === h[i]) { p = p + k + 1; moved = true; break; }
       }
-    });
+      if (moved) continue;
+      // Skipped ahead? Look for the next few spoken words as a phrase further down the script
+      const phrase = h.slice(i, i + 3);
+      const enough = phrase.length === 3 || (phrase.length === 2 && phrase.join('').length >= 8);
+      if (!enough) continue;
+      for (let j = p; j < Math.min(words.length, p + 400); j++) {
+        if (phrase.every((w, x) => words[j + x] && words[j + x].norm === w)) {
+          p = j + phrase.length;
+          i += phrase.length - 1;
+          break;
+        }
+      }
+    }
     return p;
   }
 
