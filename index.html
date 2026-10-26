@@ -100,21 +100,22 @@
     paint();
   }
 
-  // Follow along: match nearby words, and jump ahead when a phrase further down is spoken
-  function advance(heard, from) {
+  // Follow along: match nearby words. Only skip ahead a short distance, and only on final results.
+  const LOOKAHEAD = 4;    // words it can slide forward for a normal match
+  const JUMP_WINDOW = 25; // max words it can skip ahead when you skip a bit of the script
+  function advance(heard, from, allowJump) {
     const h = heard.map(norm).filter(Boolean);
     let p = from;
     for (let i = 0; i < h.length; i++) {
       let moved = false;
-      for (let k = 0; k < 4 && p + k < words.length; k++) {
+      for (let k = 0; k < LOOKAHEAD && p + k < words.length; k++) {
         if (words[p + k].norm === h[i]) { p = p + k + 1; moved = true; break; }
       }
-      if (moved) continue;
-      // Skipped ahead? Look for the next few spoken words as a phrase further down the script
+      if (moved || !allowJump) continue;
+      // Skipped a few words? Look for the next 3 spoken words as a phrase just a little further down
       const phrase = h.slice(i, i + 3);
-      const enough = phrase.length === 3 || (phrase.length === 2 && phrase.join('').length >= 8);
-      if (!enough) continue;
-      for (let j = p; j < Math.min(words.length, p + 400); j++) {
+      if (phrase.length < 3) continue;
+      for (let j = p; j < Math.min(words.length, p + JUMP_WINDOW); j++) {
         if (phrase.every((w, x) => words[j + x] && words[j + x].norm === w)) {
           p = j + phrase.length;
           i += phrase.length - 1;
@@ -145,10 +146,10 @@
       let interim = [];
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript.trim().split(/\s+/);
-        if (e.results[i].isFinal) committed = advance(t, committed);
+        if (e.results[i].isFinal) committed = advance(t, committed, true);
         else interim = interim.concat(t);
       }
-      shown = Math.max(committed, advance(interim, committed));
+      shown = Math.max(committed, advance(interim, committed, false));
       paint();
     };
     rec.onend = () => { if (listening) { try { rec.start(); } catch (_) {} } };
