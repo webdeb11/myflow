@@ -1,0 +1,86 @@
+MyFlow index.html
+Copy everything in the code block below and paste it into GitHub as index.html.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyFlow</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #111; color: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
+  #text { flex: 1; width: 100%; padding: 40px; background: transparent; color: #f5f5f5; border: none; outline: none; font-size: 42px; line-height: 1.4; resize: none; font-family: inherit; }
+  #status { text-align: center; font-size: 16px; color: #888; padding: 8px; }
+  .bar { display: flex; justify-content: center; gap: 20px; padding: 24px; background: #1b1b1b; }
+  button { font-size: 22px; font-weight: 600; padding: 18px 36px; border: none; border-radius: 40px; cursor: pointer; color: #fff; }
+  #play { background: #2e7d32; min-width: 180px; }
+  #play.on { background: #c62828; }
+  #restart { background: #444; }
+  #copy { background: #1565c0; }
+</style>
+</head>
+<body>
+  <textarea id="text" placeholder="Hit Play and start talking..."></textarea>
+  <div id="status">Ready</div>
+  <div class="bar">
+    <button id="play">▶ Play</button>
+    <button id="restart">↺ Restart</button>
+    <button id="copy">Copy</button>
+  </div>
+<script>
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const textEl = document.getElementById('text');
+  const statusEl = document.getElementById('status');
+  const playBtn = document.getElementById('play');
+  if (!SR) { statusEl.textContent = 'Speech recognition not supported in this browser.'; playBtn.disabled = true; }
+  const rec = new SR();
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = 'en-US';
+  let listening = false;
+  let finalText = '';
+  rec.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t.trim() + ' ';
+      else interim += t;
+    }
+    textEl.value = finalText + interim;
+    textEl.scrollTop = textEl.scrollHeight;
+  };
+  rec.onend = () => { if (listening) { try { rec.start(); } catch (_) {} } };
+  rec.onerror = (e) => { statusEl.textContent = 'Error: ' + e.error; };
+  function start() {
+    finalText = textEl.value ? textEl.value.trim() + ' ' : '';
+    listening = true;
+    try { rec.start(); } catch (_) {}
+    playBtn.textContent = '⏸ Pause';
+    playBtn.classList.add('on');
+    statusEl.textContent = 'Listening...';
+  }
+  function stop() {
+    listening = false;
+    rec.stop();
+    playBtn.textContent = '▶ Play';
+    playBtn.classList.remove('on');
+    statusEl.textContent = 'Paused';
+  }
+  function restart() {
+    finalText = '';
+    textEl.value = '';
+    if (listening) { rec.abort(); } else { start(); }
+    statusEl.textContent = 'Listening... (fresh start)';
+  }
+  playBtn.onclick = () => listening ? stop() : start();
+  document.getElementById('restart').onclick = restart;
+  document.getElementById('copy').onclick = () => { navigator.clipboard.writeText(textEl.value.trim()); statusEl.textContent = 'Copied!'; };
+  document.addEventListener('keydown', (e) => {
+    if (!e.altKey) return;
+    if (e.code === 'Space') { e.preventDefault(); playBtn.click(); }
+    if (e.code === 'KeyR') { e.preventDefault(); restart(); }
+    if (e.code === 'KeyC') { e.preventDefault(); document.getElementById('copy').click(); }
+  });
+</script>
+</body>
+</html>
