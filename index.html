@@ -1,85 +1,215 @@
-MyFlow index.html
-Copy everything in the code block below and paste it into GitHub as index.html.
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MyFlow</title>
+<title>MyFlow Teleprompter</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #111; color: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
-  #text { flex: 1; width: 100%; padding: 40px; background: transparent; color: #f5f5f5; border: none; outline: none; font-size: 42px; line-height: 1.4; resize: none; font-family: inherit; }
-  #status { text-align: center; font-size: 16px; color: #888; padding: 8px; }
-  .bar { display: flex; justify-content: center; gap: 20px; padding: 24px; background: #1b1b1b; }
-  button { font-size: 22px; font-weight: 600; padding: 18px 36px; border: none; border-radius: 40px; cursor: pointer; color: #fff; }
-  #play { background: #2e7d32; min-width: 180px; }
+  #editor { flex: 1; display: flex; flex-direction: column; padding: 24px; gap: 12px; }
+  #input { flex: 1; background: #1b1b1b; color: #f5f5f5; border: 1px solid #333; border-radius: 12px; padding: 20px; font-size: 20px; font-family: inherit; resize: none; }
+  #prompter { flex: 1; overflow-y: auto; padding: 40vh 60px; font-size: 48px; line-height: 1.5; display: none; }
+  .title { color: #777; font-weight: 700; margin: 30px 0 10px; }
+  .note { color: #777; }
+  .para { margin-bottom: 30px; }
+  .word { color: #f5f5f5; transition: color 0.15s; }
+  .word.done { color: #4caf50; }
+  .word.current { background: #333; border-radius: 6px; }
+  #status { text-align: center; font-size: 16px; color: #888; padding: 6px; }
+  .bar { display: flex; justify-content: center; gap: 16px; padding: 20px; background: #1b1b1b; flex-wrap: wrap; }
+  button, label.btn { font-size: 20px; font-weight: 600; padding: 16px 30px; border: none; border-radius: 40px; cursor: pointer; color: #fff; background: #444; }
+  #play { background: #2e7d32; min-width: 160px; }
   #play.on { background: #c62828; }
-  #restart { background: #444; }
-  #copy { background: #1565c0; }
+  #load { background: #1565c0; }
+  input[type=file] { display: none; }
 </style>
 </head>
 <body>
-  <textarea id="text" placeholder="Hit Play and start talking..."></textarea>
-  <div id="status">Ready</div>
+  <div id="editor">
+    <textarea id="input" placeholder="Paste your script here, or upload a .txt file. Titles on their own line and [anything in brackets] will show in grey."></textarea>
+  </div>
+  <div id="prompter"></div>
+  <div id="status">Paste or upload a script, then tap Load</div>
   <div class="bar">
+    <label class="btn">Upload<input type="file" id="file" accept=".txt,text/plain"></label>
+    <button id="load">Load</button>
     <button id="play">▶ Play</button>
     <button id="restart">↺ Restart</button>
-    <button id="copy">Copy</button>
+    <button id="edit">Edit</button>
   </div>
 <script>
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const textEl = document.getElementById('text');
+  const input = document.getElementById('input');
+  const editor = document.getElementById('editor');
+  const prompter = document.getElementById('prompter');
   const statusEl = document.getElementById('status');
   const playBtn = document.getElementById('play');
-  if (!SR) { statusEl.textContent = 'Speech recognition not supported in this browser.'; playBtn.disabled = true; }
-  const rec = new SR();
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.lang = 'en-US';
+
+  let words = [];      // spoken words: {norm, el}
+  let committed = 0;   // position confirmed by final results
+  let shown = 0;       // position shown on screen
   let listening = false;
-  let finalText = '';
-  rec.onresult = (e) => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) finalText += t.trim() + ' ';
-      else interim += t;
-    }
-    textEl.value = finalText + interim;
-    textEl.scrollTop = textEl.scrollHeight;
-  };
-  rec.onend = () => { if (listening) { try { rec.start(); } catch (_) {} } };
-  rec.onerror = (e) => { statusEl.textContent = 'Error: ' + e.error; };
-  function start() {
-    finalText = textEl.value ? textEl.value.trim() + ' ' : '';
+  let rec = null;
+
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9']/g, '');
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // A title is a short line on its own with no ending punctuation
+  function isTitle(line) {
+    const t = line.trim();
+    if (!t || /^[\[(].*[\])]$/.test(t)) return false;
+    return t.split(/\s+/).length <= 10 && !/[.!?,;:]$/.test(t);
+  }
+
+  function render(text) {
+    words = []; committed = 0; shown = 0;
+    prompter.innerHTML = '';
+    text.split(/\n/).forEach(line => {
+      if (!line.trim()) return;
+      const div = document.createElement('div');
+      if (isTitle(line)) {
+        div.className = 'title';
+        div.textContent = line.trim();
+        prompter.appendChild(div);
+        return;
+      }
+      div.className = 'para';
+      line.split(/(\[[^\]]*\]|\([^)]*\))/).forEach(part => {
+        if (!part) return;
+        if (/^[\[(]/.test(part)) {
+          const s = document.createElement('span');
+          s.className = 'note';
+          s.textContent = part + ' ';
+          div.appendChild(s);
+        } else {
+          part.split(/\s+/).forEach(w => {
+            if (!w) return;
+            const s = document.createElement('span');
+            s.className = 'word';
+            s.textContent = w;
+            div.appendChild(s);
+            div.appendChild(document.createTextNode(' '));
+            const n = norm(w);
+            if (n) words.push({ norm: n, el: s });
+          });
+        }
+      });
+      prompter.appendChild(div);
+    });
+    paint();
+  }
+
+  // Move forward through the script, matching heard words within a small window
+  function advance(heard, from) {
+    let p = from;
+    heard.forEach(h => {
+      const n = norm(h);
+      if (!n) return;
+      for (let k = 0; k < 8 && p + k < words.length; k++) {
+        if (words[p + k].norm === n) { p = p + k + 1; break; }
+      }
+    });
+    return p;
+  }
+
+  function paint() {
+    words.forEach((w, i) => {
+      w.el.classList.toggle('done', i < shown);
+      w.el.classList.toggle('current', i === shown);
+    });
+    const cur = words[Math.min(shown, words.length - 1)];
+    if (cur) cur.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (shown >= words.length && words.length) statusEl.textContent = 'Finished!';
+  }
+
+  function setupRec() {
+    if (!SR) { statusEl.textContent = 'Speech recognition is not supported in this browser.'; return; }
+    rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+    rec.onresult = e => {
+      let interim = [];
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript.trim().split(/\s+/);
+        if (e.results[i].isFinal) committed = advance(t, committed);
+        else interim = interim.concat(t);
+      }
+      shown = Math.max(committed, advance(interim, committed));
+      paint();
+    };
+    rec.onend = () => { if (listening) { try { rec.start(); } catch (_) {} } };
+    rec.onerror = e => { if (e.error !== 'no-speech' && e.error !== 'aborted') statusEl.textContent = 'Error: ' + e.error; };
+  }
+  setupRec();
+
+  function showPrompter() {
+    editor.style.display = 'none';
+    prompter.style.display = 'block';
+  }
+
+  function load() {
+    if (!input.value.trim()) { statusEl.textContent = 'Paste a script first'; return; }
+    render(input.value);
+    showPrompter();
+    statusEl.textContent = 'Ready. Hit Play and start reading.';
+  }
+
+  function play() {
+    if (!words.length) load();
+    if (!words.length || !rec) return;
     listening = true;
     try { rec.start(); } catch (_) {}
     playBtn.textContent = '⏸ Pause';
     playBtn.classList.add('on');
     statusEl.textContent = 'Listening...';
   }
-  function stop() {
+
+  function pause() {
     listening = false;
-    rec.stop();
+    if (rec) rec.stop();
     playBtn.textContent = '▶ Play';
     playBtn.classList.remove('on');
     statusEl.textContent = 'Paused';
   }
+
   function restart() {
-    finalText = '';
-    textEl.value = '';
-    if (listening) { rec.abort(); } else { start(); }
-    statusEl.textContent = 'Listening... (fresh start)';
+    committed = 0; shown = 0;
+    paint();
+    prompter.scrollTop = 0;
+    if (listening && rec) rec.abort(); // auto restarts fresh
+    statusEl.textContent = listening ? 'Listening... back to the top' : 'Back to the top. Hit Play.';
   }
-  playBtn.onclick = () => listening ? stop() : start();
+
+  document.getElementById('file').onchange = e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { input.value = r.result; load(); };
+    r.readAsText(f);
+  };
+  document.getElementById('load').onclick = load;
   document.getElementById('restart').onclick = restart;
-  document.getElementById('copy').onclick = () => { navigator.clipboard.writeText(textEl.value.trim()); statusEl.textContent = 'Copied!'; };
-  document.addEventListener('keydown', (e) => {
+  document.getElementById('edit').onclick = () => {
+    pause();
+    prompter.style.display = 'none';
+    editor.style.display = 'flex';
+    statusEl.textContent = 'Edit your script, then tap Load';
+  };
+  playBtn.onclick = () => listening ? pause() : play();
+
+  // Tap a word to jump there
+  prompter.addEventListener('click', e => {
+    const i = words.findIndex(w => w.el === e.target);
+    if (i >= 0) { committed = i; shown = i; paint(); }
+  });
+
+  // Shortcuts: Option+Space play/pause, Option+R restart
+  document.addEventListener('keydown', e => {
     if (!e.altKey) return;
     if (e.code === 'Space') { e.preventDefault(); playBtn.click(); }
     if (e.code === 'KeyR') { e.preventDefault(); restart(); }
-    if (e.code === 'KeyC') { e.preventDefault(); document.getElementById('copy').click(); }
   });
 </script>
 </body>
